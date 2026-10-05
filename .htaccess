@@ -1,0 +1,14 @@
+# MUKIL TECH - WAMP / Apache configuration
+Options -Indexes
+
+# Keep the PHP application entry point predictable.
+DirectoryIndex index.php
+
+# Prevent direct access to internal configuration and SQL files.
+<FilesMatch "^(database\.sql|\.env|\.gitignore)$">
+    Require all denied
+</FilesMatch>
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+    RewriteRule ^(?:config|includes)/.*\.(?:php|inc)$ - [F,L]
+</IfModule>
