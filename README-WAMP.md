@@ -79,3 +79,13 @@ PHP 8.1+ is recommended.
 
 ### Backup
 Use phpMyAdmin Export to create a database backup before major changes.
+
+### Password recovery and security
+- Set the Apache environment variable `APP_URL` to the full application URL, for example `http://localhost/Mukil-Tech-WAMP-Fixed` (use HTTPS on public deployments). Restart Apache after changing its environment.
+- Configure PHP mail delivery and a valid business email in Settings. Recovery links are delivered only by email; they are never displayed in the browser. Existing reset links must be requested again after this update.
+- Database backups and the WAMP diagnostic page require an authenticated administrator. Apache must allow this project's `.htaccess` rules to protect internal files and Git metadata.
+- Replace the documented demonstration passwords before exposing the application. Use a dedicated database account with only the permissions needed by the application instead of the default WAMP root account.
+- The login cooldown is session-based; use server-level rate limiting for an internet-facing deployment.
+
+### Regression checks
+Run `php tests/security.php` from the project folder. This checks authorization defaults, session-bound CSRF validation, and the login cooldown without modifying the database.

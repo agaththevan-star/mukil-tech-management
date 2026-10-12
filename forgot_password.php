@@ -17,10 +17,6 @@ $businessName = getSetting('business_name', 'MUKIL TECH');
 $businessPhone = getSetting('phone', '077 479 5253 / 075 531 6840');
 $error = '';
 $success = false;
-$resetLink = '';
-$otpCode = '';
-$maskedEmail = '';
-$mailSent = false;
 
 // Ensure password_resets table exists
 try {
@@ -59,9 +55,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 // Invalidate any existing unused reset tokens for this user
                 $db->prepare("UPDATE password_resets SET used = 1 WHERE user_id = ? AND used = 0")->execute([$user['user_id']]);
 
-                // Generate secure token and 6-digit OTP
+                // Store only a digest of the recovery credential.
                 $token = bin2hex(random_bytes(32));
-                $otp = str_pad((string)random_int(100000, 999999), 6, '0', STR_PAD_LEFT);
 
                 $userEmail = trim($user['email'] ?? '');
                 if (empty($userEmail)) {
@@ -69,51 +64,45 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 }
 
                 $ins = $db->prepare("INSERT INTO password_resets (user_id, email, token, otp, expires_at) VALUES (?, ?, ?, ?, DATE_ADD(NOW(), INTERVAL 1 HOUR))");
-                $ins->execute([$user['user_id'], $userEmail, $token, $otp]);
+                $ins->execute([$user['user_id'], $userEmail, hash('sha256', $token), '']);
 
                 $success = true;
-                $resetLink = baseUrl('reset_password.php?token=' . urlencode($token));
-                $otpCode = $otp;
-
-                // Mask email for display (e.g., ad***@mukiltech.com)
-                if (filter_var($userEmail, FILTER_VALIDATE_EMAIL)) {
-                    $parts = explode('@', $userEmail);
-                    $namePart = $parts[0];
-                    $domainPart = $parts[1] ?? '';
-                    $visibleLen = min(2, strlen($namePart));
-                    $maskedEmail = substr($namePart, 0, $visibleLen) . str_repeat('*', max(3, strlen($namePart) - $visibleLen)) . '@' . $domainPart;
-                } else {
-                    $maskedEmail = 'your registered account';
-                }
 
                 // Attempt to send email via PHP mail()
                 if (filter_var($userEmail, FILTER_VALIDATE_EMAIL)) {
                     $subject = "Password Reset Request - " . $businessName;
-                    $protocol = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https://' : 'http://';
-                    $fullResetUrl = $protocol . ($_SERVER['HTTP_HOST'] ?? 'localhost') . $resetLink;
+                    $appUrl = rtrim(getenv('APP_URL') ?: '', '/');
+                    if (!filter_var($appUrl, FILTER_VALIDATE_URL) || !in_array(parse_url($appUrl, PHP_URL_SCHEME), ['https', 'http'], true)) {
+                        throw new RuntimeException('Configure APP_URL for password reset email.');
+                    }
+                    $fullResetUrl = $appUrl . '/reset_password.php?token=' . urlencode($token);
 
                     $message = "Hello " . ($user['full_name'] ?? $user['username']) . ",\n\n";
                     $message .= "A password reset request was received for your account at " . $businessName . ".\n\n";
-                    $message .= "Your Verification Code: " . $otp . "\n";
                     $message .= "Direct Reset Link:\n" . $fullResetUrl . "\n\n";
-                    $message .= "This link and code will expire in 1 hour.\n";
+                    $message .= "This link will expire in 1 hour.\n";
                     $message .= "If you did not request this reset, please ignore this email.\n\n";
                     $message .= "Regards,\n" . $businessName . "\nPhone: " . $businessPhone;
 
-                    $headers = "From: no-reply@" . ($_SERVER['SERVER_NAME'] ?? 'mukiltech.com') . "\r\n" .
-                               "Reply-To: " . getSetting('email', 'mukiltech7@gmail.com') . "\r\n" .
-                               "X-Mailer: PHP/" . phpversion();
+                    $sender = getSetting('email', 'mukiltech7@gmail.com');
+                    if (!filter_var($sender, FILTER_VALIDATE_EMAIL)) {
+                        throw new RuntimeException('Configure a valid sender email.');
+                    }
+                    $subject = str_replace(["\r", "\n"], '', $subject);
+                    $headers = ['From' => $sender, 'Reply-To' => $sender];
 
                     // Suppress warning if mail server is not configured in php.ini
-                    $mailSent = @mail($userEmail, $subject, $message, $headers);
+                    if (!@mail($userEmail, $subject, $message, $headers)) {
+                        error_log('[mukiltech] Password reset email delivery failed.');
+                    }
                 }
             } else {
                 // If user not found, give a neutral message to prevent username enumeration,
                 // but inform the user to contact the shop admin if needed
-                $error = 'No active account found with that username or email. Please check and try again.';
+                $success = true;
             }
         } catch (Exception $e) {
-            $error = 'An error occurred while processing your request. Please try again or contact the administrator.';
+            $success = true;
             error_log('[mukiltech] Forgot password error: ' . $e->getMessage());
         }
     }
@@ -374,33 +363,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             <a href="<?= baseUrl('home.php') ?>">Home Page</a>
         </div>
     <?php else: ?>
-        <div class="alert alert-success">
-            <strong>Password Reset Request Created!</strong>
-            <p style="margin:0.4rem 0 0 0;font-size:0.85rem;">
-                A reset token has been generated for <strong><?= e($maskedEmail) ?></strong>.
-            </p>
-        </div>
-
-        <?php if ($mailSent): ?>
-            <p style="font-size:0.88rem;color:#475569;text-align:center;line-height:1.5;">
-                We've dispatched an email containing your reset instructions and verification code. Please check your inbox.
-            </p>
-        <?php endif; ?>
-
-        <div class="reset-box">
-            <div style="font-size:0.8rem;text-transform:uppercase;letter-spacing:0.5px;color:#64748b;font-weight:700;">
-                Verification Security Code
-            </div>
-            <div class="otp-display"><?= e($otpCode) ?></div>
-            <div style="font-size:0.75rem;color:#94a3b8;margin-bottom:1rem;">
-                Valid for 1 hour
-            </div>
-
-            <a href="<?= e($resetLink) ?>" class="btn-submit" style="display:block;text-align:center;text-decoration:none;box-sizing:border-box;">
-                Proceed to Reset Password &rarr;
-            </a>
-        </div>
-
+        <div class="alert alert-success">If an active account matches, reset instructions will be sent to its registered email address. If no email arrives, contact the administrator.</div>
         <p style="font-size:0.8rem;color:#64748b;text-align:center;line-height:1.4;">
             Need help? Contact system support at <strong><?= e($businessPhone) ?></strong>.
         </p>

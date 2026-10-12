@@ -30,8 +30,29 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             $db->beginTransaction();
 
             $subtotal = 0;
-            foreach ($cartItems as $it) {
+            $requested = [];
+            $productStmt = $db->prepare('SELECT product_name, selling_price, stock_quantity FROM products WHERE product_id = ? FOR UPDATE');
+            foreach ($cartItems as &$it) {
+                if (!is_array($it) || !filter_var($it['id'] ?? null, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]]) || !filter_var($it['qty'] ?? null, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]])) {
+                    throw new RuntimeException('Invalid cart item.');
+                }
+                $productStmt->execute([$it['id']]);
+                $product = $productStmt->fetch();
+                $requested[$it['id']] = ($requested[$it['id']] ?? 0) + (int)$it['qty'];
+                if (!$product || $requested[$it['id']] > (int)$product['stock_quantity']) {
+                    throw new RuntimeException('Product unavailable or insufficient stock.');
+                }
+                $it['name'] = $product['product_name'];
+                $it['price'] = (float)$product['selling_price'];
+                $it['discount'] = (float)($it['discount'] ?? 0);
+                if (!is_finite($it['discount']) || $it['discount'] < 0 || $it['discount'] > $it['price'] * $it['qty']) {
+                    throw new RuntimeException('Invalid discount.');
+                }
                 $subtotal += ($it['price'] * $it['qty']) - ($it['discount'] ?? 0);
+            }
+            unset($it);
+            if (!is_finite($overallDiscount) || !is_finite($paidAmount) || $overallDiscount > $subtotal) {
+                throw new RuntimeException('Invalid payment or discount.');
             }
             $grandTotal = max(0, $subtotal - $overallDiscount);
             $balance = max(0, $grandTotal - $paidAmount);
@@ -90,7 +111,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 $stmtInvItem->execute([$invoiceId, $pName, $qty, $uPrice, $iDisc, $rowTotal]);
 
                 // Deduct stock and log movement
-                recordStockMovement($pId, 'SALE', -$qty, $invoiceNo, "POS Sale Invoice #$invoiceNo");
+                if (!recordStockMovement($pId, 'SALE', -$qty, $invoiceNo, "POS Sale Invoice #$invoiceNo")) {
+                    throw new RuntimeException('Stock update failed.');
+                }
             }
 
             // 4. Log Payment if paid > 0
@@ -173,7 +196,7 @@ $selectedCustId = (int)($_GET['customer_id'] ?? 5); // default walk-in
                      data-sku="<?= e($p['sku'] ?? '') ?>" 
                      data-brand="<?= e($p['brand'] ?? '') ?>" 
                      data-cat="<?= $p['category_id'] ?? 0 ?>"
-                     onclick="addToCart(<?= $p['product_id'] ?>, '<?= addslashes(e($p['product_name'])) ?>', <?= $p['selling_price'] ?>, <?= $p['stock_quantity'] ?>)">
+                     onclick="addToCart(Number(this.dataset.id), this.dataset.name, Number(this.dataset.price), Number(this.dataset.stock))">
                     
                     <div>
                         <div class="pos-item-brand"><?= e($p['brand'] ?: 'Hardware') ?></div>
@@ -400,7 +423,7 @@ function renderCart() {
         var rowTotal = (item.price * item.qty) - item.discount;
         tr.innerHTML = `
             <td>
-                <div style="font-weight:600;color:var(--navy-main);">${item.name}</div>
+                <div class="cart-product-name" style="font-weight:600;color:var(--navy-main);"></div>
                 <div style="font-size:0.72rem;color:var(--text-muted);">Rs. ${item.price.toFixed(2)} each</div>
             </td>
             <td style="text-align:center;">
@@ -416,6 +439,7 @@ function renderCart() {
                 <button type="button" style="background:none;border:none;color:var(--danger);cursor:pointer;font-size:0.9rem;" onclick="removeFromCart(${item.id})" title="Remove item">&times;</button>
             </td>
         `;
+        tr.querySelector('.cart-product-name').textContent = item.name;
         tbody.appendChild(tr);
     });
 

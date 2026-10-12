@@ -21,6 +21,7 @@ if (isset($_GET['reset']) && $_GET['reset'] === 'success') {
 }
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    verifyCsrfToken();
     // Basic rate limiting or CSRF could go here, but let's keep it simple
     // Simple session based rate limiter
     if (empty($_SESSION['login_attempts'])) {
@@ -35,7 +36,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $error = 'Too many login attempts. Please try again later.';
     }
     
-    if (empty($username) || empty($password)) {
+    if ($error !== '') {
+        // Do not attempt authentication while throttled.
+    } elseif (empty($username) || empty($password)) {
         $error = 'Please enter both username and password.';
     } else {
         $db = getDB();
@@ -46,6 +49,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if ($user && password_verify($password, $user['password'])) {
             // Login successful, set session variables
             session_regenerate_id(true);
+            unset($_SESSION['csrf_token']);
             $_SESSION['user_id'] = $user['user_id'];
             $_SESSION['username'] = $user['username'];
             $_SESSION['full_name'] = $user['full_name'];
@@ -256,6 +260,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     <?php endif; ?>
     
     <form method="POST" action="<?= baseUrl('login.php') ?>">
+        <input type="hidden" name="csrf_token" value="<?= csrfToken() ?>">
         <div class="form-group">
             <label class="form-label" for="username">Username</label>
             <input type="text" id="username" name="username" class="form-control" required autofocus>

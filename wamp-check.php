@@ -1,6 +1,8 @@
 <?php
 // Temporary WAMP diagnostic. Delete this file after setup if the system is exposed publicly.
 require_once __DIR__ . '/config/database.php';
+require_once __DIR__ . '/includes/auth.php';
+requireRole('admin');
 
 header('Content-Type: text/html; charset=utf-8');
 ?>

@@ -3,16 +3,6 @@
  * MUKIL TECH - Authentication & Authorization Helper (Direct Access Mode)
  */
 
-// CSRF secret key for HMAC token signing. Prefer environment variable for production.
-if (!defined('CSRF_SECRET_KEY')) {
-    $envKey = getenv('CSRF_SECRET_KEY');
-    if (!empty($envKey)) {
-        define('CSRF_SECRET_KEY', $envKey);
-    } else {
-        define('CSRF_SECRET_KEY', 'mukil_tech_kilinochchi_secure_csrf_key_2026');
-    }
-}
-
 // WAMP/Apache session configuration.
 // Use session cookies (no persistent cookie) and tightened flags.
 if (session_status() === PHP_SESSION_NONE) {
@@ -27,6 +17,7 @@ if (session_status() === PHP_SESSION_NONE) {
         'samesite' => 'Strict',
     ]);
 
+    ini_set('session.use_strict_mode', '1');
     ini_set('session.use_only_cookies', '1');
     ini_set('session.cookie_httponly', '1');
     session_start();
@@ -36,6 +27,7 @@ if (session_status() === PHP_SESSION_NONE) {
 // Switch-role via GET removed
 
 require_once __DIR__ . '/../config/database.php';
+require_once __DIR__ . '/functions.php';
 
 /**
  * Check if a user is logged in
@@ -61,11 +53,11 @@ function requireLogin() {
  */
 function currentUser() {
     return [
-        'id'        => $_SESSION['user_id'] ?? 1,
-        'username'  => $_SESSION['username'] ?? 'admin',
-        'full_name' => $_SESSION['full_name'] ?? 'Mukil Admin',
-        'role'      => $_SESSION['role'] ?? 'admin',
-        'email'     => $_SESSION['email'] ?? 'mukiltech7@gmail.com',
+        'id'        => $_SESSION['user_id'] ?? null,
+        'username'  => $_SESSION['username'] ?? '',
+        'full_name' => $_SESSION['full_name'] ?? '',
+        'role'      => $_SESSION['role'] ?? '',
+        'email'     => $_SESSION['email'] ?? '',
     ];
 }
 
@@ -78,7 +70,7 @@ function hasRole($roles) {
     if (!is_array($roles)) {
         $roles = [$roles];
     }
-    return in_array($_SESSION['role'] ?? 'admin', $roles, true);
+    return isLoggedIn() && in_array($_SESSION['role'] ?? '', $roles, true);
 }
 
 /**
@@ -86,6 +78,7 @@ function hasRole($roles) {
  * @param array|string $roles
  */
 function requireRole($roles) {
+    requireLogin();
     if (!hasRole($roles)) {
         http_response_code(403);
         require_once __DIR__ . '/functions.php';
@@ -96,9 +89,8 @@ function requireRole($roles) {
             <div style='background:#fff;padding:40px;border-radius:12px;box-shadow:0 10px 25px rgba(0,0,0,0.05);text-align:center;max-width:480px;'>
                 <div style='font-size:50px;color:#ef4444;margin-bottom:15px;'>&#9888;</div>
                 <h2 style='color:#0f172a;margin:0 0 10px 0;'>Role Restricted</h2>
-                <p style='color:#64748b;margin-bottom:25px;'>Your current active role is <strong>" . htmlspecialchars($_SESSION['role'] ?? 'User') . "</strong>. Switch to <strong>Admin</strong> in the top header bar to access this module.</p>
+                <p style='color:#64748b;margin-bottom:25px;'>Your account does not have permission to access this module.</p>
                 <div style='display:flex;gap:10px;justify-content:center;'>
-                    <a href='?switch_role=admin' class='btn btn-primary'>Switch to Admin Role</a>
                     <a href='" . baseUrl('admin/dashboard.php') . "' class='btn btn-outline'>Back to Dashboard</a>
                 </div>
             </div>
@@ -108,47 +100,12 @@ function requireRole($roles) {
 }
 
 /**
- * Generate an HMAC-signed CSRF token (survives cross-site cookie isolation)
- */
-function generateSignedToken() {
-    $timestamp = time();
-    $entropy   = bin2hex(random_bytes(16));
-    $payload   = $timestamp . '.' . $entropy;
-    $hmac      = hash_hmac('sha256', $payload, CSRF_SECRET_KEY);
-    return base64_encode($payload . '.' . $hmac);
-}
-
-/**
- * Validate an HMAC-signed CSRF token
- */
-function validateSignedToken($token, $maxAgeSeconds = 86400) {
-    if (empty($token) || !is_string($token)) {
-        return false;
-    }
-    $decoded = base64_decode($token, true);
-    if (!$decoded) {
-        return false;
-    }
-    $parts = explode('.', $decoded);
-    if (count($parts) !== 3) {
-        return false;
-    }
-    list($timestamp, $entropy, $hmac) = $parts;
-    $time = (int)$timestamp;
-    if ($time > time() + 120 || $time < time() - $maxAgeSeconds) {
-        return false;
-    }
-    $expectedHmac = hash_hmac('sha256', $timestamp . '.' . $entropy, CSRF_SECRET_KEY);
-    return hash_equals($expectedHmac, $hmac);
-}
-
-/**
  * Generate or get CSRF token
  * @return string
  */
 function csrfToken() {
-    if (empty($_SESSION['csrf_token']) || !validateSignedToken($_SESSION['csrf_token'])) {
-        $_SESSION['csrf_token'] = generateSignedToken();
+    if (empty($_SESSION['csrf_token'])) {
+        $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
     }
     return $_SESSION['csrf_token'];
 }
@@ -163,10 +120,9 @@ function verifyCsrfToken($terminateOnError = true) {
         $token = $_POST['csrf_token'] ?? $_SERVER['HTTP_X_CSRF_TOKEN'] ?? '';
         
         $sessionToken = $_SESSION['csrf_token'] ?? '';
-        $validBySession = (!empty($sessionToken) && !empty($token) && hash_equals($sessionToken, $token));
-        $validByHmac = validateSignedToken($token);
+        $validBySession = (is_string($token) && is_string($sessionToken) && $sessionToken !== '' && hash_equals($sessionToken, $token));
 
-        if ($validBySession || $validByHmac) {
+        if ($validBySession) {
             if (empty($_SESSION['csrf_token']) && !empty($token)) {
                 $_SESSION['csrf_token'] = $token;
             }

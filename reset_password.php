@@ -29,7 +29,7 @@ if (empty($token)) {
                               FROM password_resets pr 
                               JOIN users u ON pr.user_id = u.user_id 
                               WHERE pr.token = ? LIMIT 1");
-        $stmt->execute([$token]);
+        $stmt->execute([hash('sha256', $token)]);
         $resetRecord = $stmt->fetch();
 
         if (!$resetRecord) {
@@ -64,6 +64,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $user) {
         try {
             $db = getDB();
             $hashed = password_hash($newPassword, PASSWORD_DEFAULT);
+            $db->beginTransaction();
+            $claim = $db->prepare("UPDATE password_resets SET used = 1 WHERE id = ? AND used = 0 AND expires_at > NOW()");
+            $claim->execute([(int)$resetRecord['id']]);
+            if ($claim->rowCount() !== 1) {
+                throw new RuntimeException('Reset token expired or already used.');
+            }
 
             // Update user password
             $upUser = $db->prepare("UPDATE users SET password = ? WHERE user_id = ?");
@@ -72,12 +78,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $user) {
             // Mark token as used
             $upReset = $db->prepare("UPDATE password_resets SET used = 1 WHERE id = ?");
             $upReset->execute([(int)$resetRecord['id']]);
+            $db->commit();
 
             // Redirect to login with success indicator
             flashMessage('Your password has been successfully reset. Please sign in with your new password.', 'success');
             header('Location: ' . baseUrl('login.php?reset=success'));
             exit;
         } catch (Exception $e) {
+            if ($db->inTransaction()) $db->rollBack();
             $error = 'Failed to update password. Please try again.';
             error_log('[mukiltech] Password update error: ' . $e->getMessage());
         }
